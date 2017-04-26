@@ -10,11 +10,15 @@ import (
 	"net/http/httputil"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 }
+
+//https://gist.github.com/Boerworz/b683e46ae0761056a636
+//https://github.com/prometheus/client_golang/blob/master/examples/simple/main.go
 
 func main() {
 
@@ -23,7 +27,11 @@ func main() {
 		Host:   "localhost:3000",
 	})
 
-	log.Fatal(http.ListenAndServe(":8080", decorate(proxy, requestLogging, timing, auth)))
+	http.Handle("/metrics", promhttp.Handler())
+	http.Handle("/", decorate(proxy, timing, wrapHandlerWithLogging))
+	//log.Fatal(http.ListenAndServe(":8080", decorate(proxy, requestLogging, timing, auth)))
+	// log.Fatal(http.ListenAndServe(":8080", decorate(proxy, timing, wrapHandlerWithLogging)))
+	log.Fatal(http.ListenAndServe(":8080", nil))
 
 }
 
@@ -74,6 +82,49 @@ func timing(next http.Handler) http.Handler {
 
 		}(time.Now())
 		next.ServeHTTP(w, req)
+	})
+}
+
+type loggingResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (lrw *loggingResponseWriter) WriteHeader(code int) {
+	lrw.statusCode = code
+	lrw.ResponseWriter.WriteHeader(code)
+}
+
+func newLoggngResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
+	return &loggingResponseWriter{w, http.StatusOK}
+}
+
+func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		lrw := newLoggngResponseWriter(w)
+		wrappedHander.ServeHTTP(lrw, req)
+
+		headers := make(map[string]string)
+
+		for k, v := range req.Header {
+			headers[k] = strings.Join(v, ",")
+		}
+
+		response := log.Fields{"status": lrw.statusCode}
+
+		request := log.Fields{
+			"host":       req.Host,
+			"requestUri": req.RequestURI,
+			"remoteAddr": req.RemoteAddr,
+			"method":     req.Method,
+			"headers":    headers,
+		}
+
+		log.WithFields(log.Fields{
+			"request":  request,
+			"response": response,
+		}).Info()
+
 	})
 }
 
