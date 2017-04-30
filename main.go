@@ -9,8 +9,20 @@ import (
 
 	"net/http/httputil"
 
+	"context"
+
 	log "github.com/Sirupsen/logrus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+type contextKey string
+
+func (c contextKey) String() string {
+	return string(c)
+}
+
+var (
+	contextKeyLatencyStart = contextKey("latencyStart")
 )
 
 func init() {
@@ -28,9 +40,8 @@ func main() {
 	})
 
 	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/", decorate(proxy, timing, wrapHandlerWithLogging))
-	//log.Fatal(http.ListenAndServe(":8080", decorate(proxy, requestLogging, timing, auth)))
-	// log.Fatal(http.ListenAndServe(":8080", decorate(proxy, timing, wrapHandlerWithLogging)))
+	http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency))
+	// http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency, auth))
 	log.Fatal(http.ListenAndServe(":8080", nil))
 
 }
@@ -74,14 +85,15 @@ func auth(next http.Handler) http.Handler {
 	})
 }
 
-func timing(next http.Handler) http.Handler {
+func latency(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		// fmt.Println("timer start")
-		defer func(start time.Time) {
-			log.Info("timing:", time.Since(start).Nanoseconds())
-
-		}(time.Now())
+		// defer func(start time.Time) {
+		// 	fmt.Println("latency:", time.Since(start).Nanoseconds())
+		// }(time.Now())
+		ctx := context.WithValue(req.Context(), contextKeyLatencyStart, time.Now())
+		req = req.WithContext(ctx)
 		next.ServeHTTP(w, req)
+
 	})
 }
 
@@ -101,7 +113,9 @@ func newLoggngResponseWriter(w http.ResponseWriter) *loggingResponseWriter {
 
 func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
 		lrw := newLoggngResponseWriter(w)
+
 		wrappedHander.ServeHTTP(lrw, req)
 
 		headers := make(map[string]string)
@@ -109,8 +123,6 @@ func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
 		for k, v := range req.Header {
 			headers[k] = strings.Join(v, ",")
 		}
-
-		response := log.Fields{"status": lrw.statusCode}
 
 		request := log.Fields{
 			"host":       req.Host,
@@ -120,32 +132,19 @@ func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
 			"headers":    headers,
 		}
 
+		ctx := req.Context()
+		latencyStart := ctx.Value(contextKeyLatencyStart).(time.Time)
+		//milliseconds
+		latency := time.Since(latencyStart).Nanoseconds() / 1000000
+
+		response := log.Fields{
+			"status":  lrw.statusCode,
+			"latency": latency,
+		}
+
 		log.WithFields(log.Fields{
 			"request":  request,
 			"response": response,
-		}).Info()
-
-	})
-}
-
-func requestLogging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		headers := make(map[string]string)
-
-		for k, v := range req.Header {
-			headers[k] = strings.Join(v, ",")
-		}
-
-		// log.Println("Start")
-		next.ServeHTTP(w, req)
-		// log.Println("Stop")
-
-		log.WithFields(log.Fields{
-			"host":       req.Host,
-			"requestUri": req.RequestURI,
-			"remoteAddr": req.RemoteAddr,
-			"method":     req.Method,
-			"headers":    headers,
 		}).Info()
 
 	})
