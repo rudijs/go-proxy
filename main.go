@@ -15,22 +15,14 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+// Custom type for request context sharing "should not use basic type string as key in context.WithValue"
 type contextKey string
 
-func (c contextKey) String() string {
-	return string(c)
-}
-
-var (
-	contextKeyLatencyStart = contextKey("latencyStart")
-)
+const latencyStart contextKey = "latencyStart"
 
 func init() {
 	log.SetFormatter(&log.JSONFormatter{})
 }
-
-//https://gist.github.com/Boerworz/b683e46ae0761056a636
-//https://github.com/prometheus/client_golang/blob/master/examples/simple/main.go
 
 func main() {
 
@@ -39,6 +31,7 @@ func main() {
 		Host:   "localhost:3000",
 	})
 
+	// TODO:rudijs Restrict access to Prometheus metrics/
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency))
 	// http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency, auth))
@@ -67,6 +60,7 @@ func auth(next http.Handler) http.Handler {
 				"username": username,
 				"password": password,
 			}).Error("not authorized")
+			// TODO:rudijs Set a context value and proceed down middlware, logging will end request if 4xx status set here
 			http.Error(w, "Not authorized", 401)
 			return
 		}
@@ -75,6 +69,7 @@ func auth(next http.Handler) http.Handler {
 				"username": username,
 				"password": password,
 			}).Error("not authorized")
+			// TODO:rudijs Set a context value and proceed down middlware, logging will end request if 4xx status set here
 			http.Error(w, "Not authorized", 401)
 			return
 		}
@@ -87,16 +82,23 @@ func auth(next http.Handler) http.Handler {
 
 func latency(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		// Can't use 'defer' as this is in a middleware stack context, the inline func runs after the last middleware, not what we want.
 		// defer func(start time.Time) {
 		// 	fmt.Println("latency:", time.Since(start).Nanoseconds())
 		// }(time.Now())
-		ctx := context.WithValue(req.Context(), contextKeyLatencyStart, time.Now())
+
+		// add request start to context
+		ctx := context.WithValue(req.Context(), latencyStart, time.Now())
+		// update this request's context
 		req = req.WithContext(ctx)
+
 		next.ServeHTTP(w, req)
 
 	})
 }
 
+// Capturing the HTTP status code from http.ResponseWriter
+// https://gist.github.com/Boerworz/b683e46ae0761056a636
 type loggingResponseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -120,6 +122,7 @@ func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
 
 		headers := make(map[string]string)
 
+		// TODO:rudijs Filter and do not log sensitive data like user:pass, api key, cookies
 		for k, v := range req.Header {
 			headers[k] = strings.Join(v, ",")
 		}
@@ -133,7 +136,7 @@ func wrapHandlerWithLogging(wrappedHander http.Handler) http.Handler {
 		}
 
 		ctx := req.Context()
-		latencyStart := ctx.Value(contextKeyLatencyStart).(time.Time)
+		latencyStart := ctx.Value(latencyStart).(time.Time)
 		//milliseconds
 		latency := time.Since(latencyStart).Nanoseconds() / 1000000
 
