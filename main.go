@@ -12,6 +12,7 @@ import (
 	"context"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -33,7 +34,7 @@ func main() {
 
 	// TODO:rudijs Restrict access to Prometheus metrics/
 	http.Handle("/metrics", promhttp.Handler())
-	http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency))
+	http.Handle("/", decorate(proxy, wrapHandlerWithLogging, uuidHeader, latency))
 	// http.Handle("/", decorate(proxy, wrapHandlerWithLogging, latency, auth))
 	log.Fatal(http.ListenAndServe(":8080", nil))
 
@@ -94,6 +95,13 @@ func latency(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, req)
 
+	})
+}
+
+func uuidHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		req.Header["X-Uuid"] = []string{uuid.New().String()}
+		next.ServeHTTP(w, req)
 	})
 }
 
